@@ -4,10 +4,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, DATABASE_URL, engine, get_db
 from main import app
+from models.click import ClickEvent
 from models.link import Link
 from services import shortener
 
@@ -106,6 +108,102 @@ def test_unknown_short_code_returns_404(client):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Short code not found."}
+
+
+def test_valid_redirect_records_one_click_event(client, test_database):
+    create_response = client.post(
+        "/links",
+        json={"url": "https://example.com/click-target"},
+    )
+    short_code = create_response.json()["short_code"]
+
+    response = client.get(f"/{short_code}", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://example.com/click-target"
+
+    with test_database() as db:
+        link_id = db.scalar(select(Link.id).where(Link.short_code == short_code))
+        clicks = db.scalars(select(ClickEvent).where(ClickEvent.link_id == link_id)).all()
+
+    assert len(clicks) == 1
+    assert clicks[0].link_id == link_id
+    assert clicks[0].clicked_at.tzinfo is not None
+    assert clicks[0].clicked_at.utcoffset() == timedelta(0)
+
+
+def test_multiple_redirects_record_multiple_click_events(client, test_database):
+    create_response = client.post(
+        "/links",
+        json={"url": "https://example.com/multiple-clicks"},
+    )
+    short_code = create_response.json()["short_code"]
+
+    for _ in range(3):
+        response = client.get(f"/{short_code}", follow_redirects=False)
+        assert response.status_code == 302
+
+    with test_database() as db:
+        link_id = db.scalar(select(Link.id).where(Link.short_code == short_code))
+        click_count = db.scalar(
+            select(func.count())
+            .select_from(ClickEvent)
+            .where(ClickEvent.link_id == link_id)
+        )
+
+    assert click_count == 3
+
+
+def test_invalid_short_code_records_no_click_event(client, test_database):
+    response = client.get("/doesnotexist", follow_redirects=False)
+
+    assert response.status_code == 404
+
+    with test_database() as db:
+        click_count = db.scalar(select(func.count()).select_from(ClickEvent))
+
+    assert click_count == 0
+
+
+def test_creating_link_records_no_click_event(client, test_database):
+    response = client.post(
+        "/links",
+        json={"url": "https://example.com/no-click-on-create"},
+    )
+
+    assert response.status_code == 201
+
+    with test_database() as db:
+        click_count = db.scalar(select(func.count()).select_from(ClickEvent))
+
+    assert click_count == 0
+
+
+def test_redirect_still_works_when_click_recording_fails(
+    client,
+    test_database,
+    monkeypatch,
+):
+    create_response = client.post(
+        "/links",
+        json={"url": "https://example.com/click-failure"},
+    )
+    short_code = create_response.json()["short_code"]
+
+    def fail_to_record_click(db, link_id):
+        raise SQLAlchemyError("simulated database failure")
+
+    monkeypatch.setattr("routers.links.record_click", fail_to_record_click)
+
+    response = client.get(f"/{short_code}", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://example.com/click-failure"
+
+    with test_database() as db:
+        click_count = db.scalar(select(func.count()).select_from(ClickEvent))
+
+    assert click_count == 0
 
 
 def test_invalid_url_is_rejected(client, test_database):

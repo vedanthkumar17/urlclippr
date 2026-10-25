@@ -2,7 +2,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from database import engine
+from database import Base, engine
+from models.click import ClickEvent
 from models.link import Link
 from routers.analytics import router as analytics_router
 from routers.links import router as links_router
@@ -10,7 +11,7 @@ from routers.links import router as links_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Link.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     yield
 
 

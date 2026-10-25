@@ -2,9 +2,10 @@ import secrets
 import string
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from models.click import ClickEvent
 from models.link import Link
 
 ALPHABET = string.ascii_letters + string.digits
@@ -21,6 +22,19 @@ def generate_short_code() -> str:
 
 def get_link_by_short_code(db: Session, short_code: str) -> Link | None:
     return db.scalar(select(Link).where(Link.short_code == short_code))
+
+
+def record_click(db: Session, link_id: int) -> ClickEvent:
+    click_event = ClickEvent(link_id=link_id)
+    db.add(click_event)
+
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise
+
+    return click_event
 
 
 def create_short_link(db: Session, original_url: str) -> Link:

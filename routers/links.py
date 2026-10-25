@@ -1,5 +1,8 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -8,9 +11,11 @@ from services.shortener import (
     ShortCodeGenerationError,
     create_short_link,
     get_link_by_short_code,
+    record_click,
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/links", response_model=LinkResponse, status_code=status.HTTP_201_CREATED)
@@ -51,7 +56,15 @@ def redirect_to_original_url(
             detail="Short code not found.",
         )
 
+    link_id = link.id
+    original_url = link.original_url
+
+    try:
+        record_click(db, link_id)
+    except SQLAlchemyError:
+        logger.exception("Failed to record click for link_id=%s", link_id)
+
     return RedirectResponse(
-        url=link.original_url,
+        url=original_url,
         status_code=status.HTTP_302_FOUND,
     )
