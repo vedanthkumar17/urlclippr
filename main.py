@@ -16,10 +16,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="URLClippr", lifespan=lifespan)
 
-app.include_router(links_router)
-app.include_router(analytics_router)
-
 
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+app.include_router(analytics_router)
+app.include_router(links_router)

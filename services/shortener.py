@@ -1,6 +1,7 @@
 import secrets
 import string
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,10 @@ class ShortCodeGenerationError(Exception):
 
 def generate_short_code() -> str:
     return "".join(secrets.choice(ALPHABET) for _ in range(6))
+
+
+def get_link_by_short_code(db: Session, short_code: str) -> Link | None:
+    return db.scalar(select(Link).where(Link.short_code == short_code))
 
 
 def create_short_link(db: Session, original_url: str) -> Link:

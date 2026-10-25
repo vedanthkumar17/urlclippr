@@ -1,9 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from database import get_db
 from schemas.link import LinkCreate, LinkResponse
-from services.shortener import ShortCodeGenerationError, create_short_link
+from services.shortener import (
+    ShortCodeGenerationError,
+    create_short_link,
+    get_link_by_short_code,
+)
 
 router = APIRouter()
 
@@ -30,4 +35,23 @@ def create_link(
         original_url=link.original_url,
         short_code=link.short_code,
         short_url=short_url,
+    )
+
+
+@router.get("/{short_code}")
+def redirect_to_original_url(
+    short_code: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    link = get_link_by_short_code(db, short_code)
+
+    if link is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Short code not found.",
+        )
+
+    return RedirectResponse(
+        url=link.original_url,
+        status_code=status.HTTP_302_FOUND,
     )

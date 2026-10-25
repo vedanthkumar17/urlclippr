@@ -88,6 +88,26 @@ def test_create_link_persists_to_database(client, test_database):
     assert link.created_at.utcoffset() == timedelta(0)
 
 
+def test_redirects_to_original_url(client):
+    create_response = client.post(
+        "/links",
+        json={"url": "https://example.com/redirect-target"},
+    )
+    short_code = create_response.json()["short_code"]
+
+    response = client.get(f"/{short_code}", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://example.com/redirect-target"
+
+
+def test_unknown_short_code_returns_404(client):
+    response = client.get("/doesnotexist", follow_redirects=False)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Short code not found."}
+
+
 def test_invalid_url_is_rejected(client, test_database):
     response = client.post("/links", json={"url": "not-a-url"})
 
