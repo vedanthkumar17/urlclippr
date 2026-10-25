@@ -262,3 +262,101 @@ def test_short_code_collision_is_retried(client, test_database, monkeypatch):
     assert [link.short_code for link in links] == [existing_code, replacement_code]
     assert links[1].created_at.tzinfo is not None
     assert links[1].created_at <= datetime.now(timezone.utc)
+
+
+def test_analytics_for_link_with_zero_clicks(client):
+    create_response = client.post(
+        "/links",
+        json={"url": "https://example.com/no-analytics-yet"},
+    )
+    short_code = create_response.json()["short_code"]
+
+    response = client.get(f"/links/{short_code}/analytics")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "short_code": short_code,
+        "total_clicks": 0,
+        "last_clicked_at": None,
+        "clicks_over_time": [],
+    }
+
+
+def test_analytics_unknown_short_code_returns_404(client):
+    response = client.get("/links/doesnotexist/analytics")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Short code not found."}
+
+
+def test_analytics_counts_redirect_visits(client):
+    create_response = client.post(
+        "/links",
+        json={"url": "https://example.com/analytics-visits"},
+    )
+    short_code = create_response.json()["short_code"]
+
+    for _ in range(2):
+        redirect_response = client.get(f"/{short_code}", follow_redirects=False)
+        assert redirect_response.status_code == 302
+
+    response = client.get(f"/links/{short_code}/analytics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["short_code"] == short_code
+    assert body["total_clicks"] == 2
+    assert body["last_clicked_at"] is not None
+    last_clicked_at = datetime.fromisoformat(
+        body["last_clicked_at"].replace("Z", "+00:00")
+    )
+    assert last_clicked_at.utcoffset() == timedelta(0)
+    assert sum(item["count"] for item in body["clicks_over_time"]) == 2
+
+
+def test_analytics_groups_clicks_by_utc_day(client, test_database):
+    create_response = client.post(
+        "/links",
+        json={"url": "https://example.com/analytics-days"},
+    )
+    short_code = create_response.json()["short_code"]
+
+    with test_database() as db:
+        link_id = db.scalar(select(Link.id).where(Link.short_code == short_code))
+        db.add_all(
+            [
+                ClickEvent(
+                    link_id=link_id,
+                    clicked_at=datetime(2026, 1, 2, 20, 0, tzinfo=timezone.utc),
+                ),
+                ClickEvent(
+                    link_id=link_id,
+                    clicked_at=datetime(
+                        2026,
+                        1,
+                        3,
+                        4,
+                        30,
+                        tzinfo=timezone(timedelta(hours=5, minutes=30)),
+                    ),
+                ),
+                ClickEvent(
+                    link_id=link_id,
+                    clicked_at=datetime(2026, 1, 3, 1, 0, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+    response = client.get(f"/links/{short_code}/analytics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_clicks"] == 3
+    assert body["clicks_over_time"] == [
+        {"date": "2026-01-02", "count": 2},
+        {"date": "2026-01-03", "count": 1},
+    ]
+    assert datetime.fromisoformat(
+        body["last_clicked_at"].replace("Z", "+00:00")
+    ) == datetime(2026, 1, 3, 1, 0, tzinfo=timezone.utc)
