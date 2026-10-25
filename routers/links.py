@@ -1,20 +1,33 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.orm import Session
 
+from database import get_db
 from schemas.link import LinkCreate, LinkResponse
-from services.shortener import create_short_link
+from services.shortener import ShortCodeGenerationError, create_short_link
 
 router = APIRouter()
 
 
-@router.post("/links", response_model=LinkResponse, status_code=201)
-def create_link(payload: LinkCreate, request: Request) -> LinkResponse:
+@router.post("/links", response_model=LinkResponse, status_code=status.HTTP_201_CREATED)
+def create_link(
+    payload: LinkCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> LinkResponse:
     original_url = str(payload.url)
-    short_code = create_short_link(original_url)
 
-    short_url = f"{str(request.base_url).rstrip('/')}/{short_code}"
+    try:
+        link = create_short_link(db, original_url)
+    except ShortCodeGenerationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+    short_url = f"{str(request.base_url).rstrip('/')}/{link.short_code}"
 
     return LinkResponse(
-        original_url=original_url,
-        short_code=short_code,
+        original_url=link.original_url,
+        short_code=link.short_code,
         short_url=short_url,
     )
